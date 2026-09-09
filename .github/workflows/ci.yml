@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    env:
+      DB_ENGINE: sqlite
+      DB_NAME: /tmp/environment-monitor.sqlite3
+      DJANGO_SECRET_KEY: ci-not-a-secret
+      OPENWEATHER_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: pip install -r backend/requirements.txt
+      - run: python backend/manage.py makemigrations --check --dry-run
+      - run: python backend/manage.py check
+      - run: python backend/manage.py migrate --noinput
+      - run: python backend/manage.py test
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend

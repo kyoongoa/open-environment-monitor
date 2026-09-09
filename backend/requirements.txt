@@ -1,0 +1,7 @@
+Django==4.2.29
+djangorestframework==3.16.1
+django-cors-headers==4.9.0
+PyMySQL==1.1.2
+django-simpleui==2024.3.25
+Pillow==11.3.0
+shap==0.46.0
