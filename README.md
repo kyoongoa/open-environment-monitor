@@ -1,6 +1,10 @@
 # Open Environment Monitor
 
 [![CI](https://github.com/kyoongoa/open-environment-monitor/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kyoongoa/open-environment-monitor/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.11-blue)
+![Django](https://img.shields.io/badge/Django-4.2.29-092E20)
+![Vue](https://img.shields.io/badge/Vue-3.5.29-42b883)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 一个可二次开发的 Django + Vue 环境监测项目。它从开发者自行配置的第三方 Provider 获取当前天气与空气污染物浓度，将已验证的真实观测累积到数据库，并以 REST API 提供实时页面、历史数据与图表数据。
 
