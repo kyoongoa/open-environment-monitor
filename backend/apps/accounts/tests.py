@@ -64,6 +64,55 @@ class EnvironmentApiTests(TestCase):
         response = self.client.get("/api/environment/history/")
         self.assertEqual(response.status_code, 400)
 
+    def test_dashboard_summary_counts_real_observations_by_available_fields(self):
+        now = datetime.now(timezone.utc)
+        EnvironmentObservation.objects.create(city="北京市", observed_at=now, source="openweather", temperature=20, humidity=40, pm25=12)
+        EnvironmentObservation.objects.create(city="兰州市", observed_at=now.replace(microsecond=1), source="openweather", weather="晴")
+        response = self.client.get("/api/environment/dashboard-summary/")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["weather_observations"], 2)
+        self.assertEqual(data["air_quality_observations"], 1)
+        self.assertEqual(data["status"], "available")
+
+    def test_read_only_observation_lists_filter_and_paginate(self):
+        now = datetime.now(timezone.utc)
+        EnvironmentObservation.objects.create(city="北京市", observed_at=now, source="openweather", temperature=20, weather="晴", aqi=60, quality="Moderate", pm25=18)
+        EnvironmentObservation.objects.create(city="兰州市", observed_at=now.replace(microsecond=1), source="openweather", humidity=40)
+        weather = self.client.get("/api/environment/weather-observations/", {"city": "北京", "page_size": 1})
+        air = self.client.get("/api/environment/air-quality-observations/", {"quality": "Moderate", "min_aqi": 50})
+        self.assertEqual(weather.status_code, 200)
+        self.assertEqual(weather.json()["total"], 1)
+        self.assertIn("temperature", weather.json()["results"][0])
+        self.assertEqual(air.status_code, 200)
+        self.assertEqual(air.json()["total"], 1)
+        self.assertEqual(air.json()["results"][0]["city"], "北京市")
+
+    def test_analysis_uses_real_observations_and_marks_sparse_correlation(self):
+        now = datetime.now(timezone.utc)
+        EnvironmentObservation.objects.create(city="北京市", observed_at=now, source="openweather", aqi=50, quality="Good", pm25=10, pm10=20, temperature=18, weather="晴")
+        EnvironmentObservation.objects.create(city="兰州市", observed_at=now.replace(microsecond=1), source="openweather", aqi=80, quality="Moderate", pm25=20, pm10=35, humidity=40)
+        response = self.client.get("/api/environment/analysis-visualization/")
+        self.assertEqual(response.status_code, 200)
+        analyses = response.json()["analyses"]
+        self.assertEqual(len(analyses), 5)
+        self.assertGreater(len(analyses[0]["charts"][0]["rows"]), 0)
+        correlation = next(chart for chart in analyses[4]["charts"] if chart["key"] == "part22")
+        self.assertEqual(correlation["status"], "insufficient_data")
+
+    def test_time_analysis_uses_indicator_timestamp_contract_and_monthly_averages(self):
+        september = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        october = datetime(2026, 10, 1, 8, tzinfo=timezone.utc)
+        EnvironmentObservation.objects.create(city="北京市", observed_at=october, source="openweather", aqi=90, pm25=30, pm10=40)
+        EnvironmentObservation.objects.create(city="北京市", observed_at=september, source="openweather", aqi=50, pm25=None, pm10=20)
+        charts = self.client.get("/api/environment/analysis-visualization/").json()["analyses"][1]["charts"]
+        aqi = next(chart for chart in charts if chart["key"] == "part6")
+        pm25 = next(chart for chart in charts if chart["key"] == "part7")
+        monthly = next(chart for chart in charts if chart["key"] == "part9")
+        self.assertEqual([row["name"] for row in aqi["rows"]], ["AQI|2026-09-01T08:00:00+00:00", "AQI|2026-10-01T08:00:00+00:00"])
+        self.assertEqual(len(pm25["rows"]), 1)
+        self.assertEqual(monthly["rows"], [{"name": "2026-09", "value": 50.0}, {"name": "2026-10", "value": 90.0}])
+
     @patch("apps.accounts.environment.get_provider", side_effect=ProviderError("Provider unavailable"))
     def test_stale_cache_is_explicitly_marked(self, _provider):
         cache.set("北京市", {"city": "北京市", "observed_at": "2026-01-01T00:00:00+00:00", "source": "fake"})

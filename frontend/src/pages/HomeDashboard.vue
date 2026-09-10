@@ -25,7 +25,7 @@
         <article class="admin-card">
           <p>数据状态</p>
           <strong>{{ adminSummary.status }}</strong>
-          <span>接口正常</span>
+          <span>{{ adminSummary.statusDetail }}</span>
         </article>
       </section>
 
@@ -164,6 +164,7 @@ const adminSummary = ref({
   airTotal: 0,
   today: "-",
   status: "加载中",
+  statusDetail: "正在读取真实观测",
 });
 
 const gaugeRef = ref(null);
@@ -354,21 +355,21 @@ async function fetchLiveData() {
 
 async function fetchAdminSummary() {
   try {
-    const [{ data: weatherData }, { data: airData }] = await Promise.all([
-      axios.get(`${API_BASE_URL}/weather-data/`, { params: { page: 1, page_size: 1 } }),
-      axios.get(`${API_BASE_URL}/air-quality-data/`, { params: { page: 1, page_size: 1 } }),
-    ]);
+    const { data } = await axios.get(`${ENVIRONMENT_API_URL}/dashboard-summary/`);
+    const summary = data.data || {};
     adminSummary.value = {
-      weatherTotal: weatherData?.total || 0,
-      airTotal: airData?.total || 0,
+      weatherTotal: summary.weather_observations || 0,
+      airTotal: summary.air_quality_observations || 0,
       today: new Date().toLocaleDateString("zh-CN"),
-      status: "正常",
+      status: summary.status_label || "暂无数据",
+      statusDetail: summary.status_detail || "尚无成功获取的真实环境观测",
     };
   } catch (error) {
     adminSummary.value = {
       ...adminSummary.value,
       today: new Date().toLocaleDateString("zh-CN"),
       status: "异常",
+      statusDetail: "工作台统计接口不可用",
     };
   }
 }

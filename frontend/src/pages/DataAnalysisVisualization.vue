@@ -13,7 +13,8 @@
       <div class="analysis-grid">
         <article v-for="chart in analysis.charts" :key="chart.key" class="chart-card">
           <h4 class="chart-card__title">{{ chart.title }}</h4>
-          <div :ref="(el) => setChartRef(chart.table, el)" class="chart-card__plot"></div>
+          <div v-if="chart.status !== 'ok'" class="chart-card__empty">{{ chart.status === 'empty' ? '暂无观测数据' : '暂无足够观测数据' }}</div>
+          <div v-else :ref="(el) => setChartRef(chart.table, el)" class="chart-card__plot"></div>
         </article>
       </div>
     </section>
@@ -32,7 +33,7 @@ const props = defineProps({
   },
 });
 
-const API_BASE_URL = "/api/auth";
+const API_BASE_URL = "/api/environment";
 const analyses = ref([]);
 const loading = ref(false);
 const errorMsg = ref("");
@@ -181,6 +182,21 @@ function buildMultiSeriesOption(rows, yName = "值") {
     yAxis: { type: "value", name: yName, axisLabel: { color: "#56717d" } },
     series,
   };
+}
+
+function formatTimeLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function buildTimeSeriesOption(rows, yName) {
+  const option = buildMultiSeriesOption(rows, yName);
+  option.xAxis.axisLabel = { ...option.xAxis.axisLabel, formatter: formatTimeLabel, rotate: 30 };
+  option.tooltip = { trigger: "axis", formatter: (params) => `${params[0]?.axisValue || params[0]?.axisValueLabel || ""}<br/>${params.map((item) => `${item.marker}${item.seriesName}: ${item.value ?? "-"}`).join("<br/>")}` };
+  if ((option.xAxis.data || []).length > 12) option.dataZoom = [{ type: "inside" }, { type: "slider", height: 16, bottom: 2 }];
+  return option;
 }
 
 function buildAreaMultiSeriesOption(rows, yName = "值") {
@@ -466,15 +482,15 @@ function createOption(chart) {
     case "part5":
       return buildAreaMultiSeriesOption(rows, "PM2.5");
     case "part6":
-      return buildMultiSeriesOption(rows, "AQI");
+      return buildTimeSeriesOption(rows, "AQI");
     case "part7":
-      return buildAreaMultiSeriesOption(rows, "PM2.5");
+      return buildTimeSeriesOption(rows, "PM2.5");
     case "part8":
-      return buildSimpleOption(rows, "bar", "AQI", baseColor);
+      return buildTimeSeriesOption(rows, "PM10");
     case "part9":
-      return buildScatterOption(rows, "年份", "PM2.5", pickColor(chart.table, 3));
+      return buildSimpleOption(rows, "bar", "AQI", baseColor);
     case "part10":
-      return buildBarLineYoYOption(rows, "优良率(%)");
+      return buildSimpleOption(rows, "line", "PM2.5", baseColor);
     case "part11":
       return buildSimpleOption(rows, "line", "AQI", baseColor);
     case "part12":
@@ -653,6 +669,8 @@ onBeforeUnmount(() => {
   color: #345964;
   line-height: 1.35;
 }
+
+.chart-card__empty { display: flex; flex: 1; min-height: 160px; align-items: center; justify-content: center; color: #6f8792; }
 
 .analysis-grid .chart-card:nth-child(1) {
   animation-delay: 0.04s;

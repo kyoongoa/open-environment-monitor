@@ -3,7 +3,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone as datetime_timezone
+from datetime import datetime, timedelta, timezone as datetime_timezone
 from threading import Lock
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -11,6 +11,8 @@ from urllib.request import Request, urlopen
 
 from django.conf import settings
 from django.db import IntegrityError
+from django.db.models import Q
+from django.core.paginator import EmptyPage, Paginator
 from django.utils import timezone
 
 from .models import EnvironmentObservation
@@ -212,3 +214,90 @@ def history(city, limit=100):
     city = resolve_city(city)
     fields = ("city", "observed_at", "collected_at", "source", "aqi", "quality", "pm25", "pm10", "so2", "no2", "co", "o3", "temperature", "humidity", "wind_speed", "weather")
     return list(EnvironmentObservation.objects.filter(city__iexact=city).order_by("-observed_at")[:limit].values(*fields))
+
+
+def dashboard_summary():
+    """Summarize only real observations accumulated by the active provider flow."""
+    observations = EnvironmentObservation.objects.all()
+    weather_fields = Q(temperature__isnull=False) | Q(humidity__isnull=False) | Q(wind_speed__isnull=False) | Q(weather__isnull=False)
+    air_fields = Q(aqi__isnull=False) | Q(pm25__isnull=False) | Q(pm10__isnull=False) | Q(so2__isnull=False) | Q(no2__isnull=False) | Q(co__isnull=False) | Q(o3__isnull=False)
+    latest = observations.order_by("-observed_at").first()
+    payload = {
+        "weather_observations": observations.filter(weather_fields).count(),
+        "air_quality_observations": observations.filter(air_fields).count(),
+        "latest_observed_at": latest.observed_at.isoformat() if latest else None,
+        "latest_source": latest.source if latest else None,
+    }
+    if latest is None:
+        return {**payload, "status": "no_data", "status_label": "暂无数据", "status_detail": "尚无成功获取的真实环境观测"}
+    if latest.observed_at >= timezone.now() - timedelta(hours=24):
+        return {**payload, "status": "available", "status_label": "数据可用", "status_detail": "最近成功观测可用"}
+    return {**payload, "status": "stale", "status_label": "数据较旧", "status_detail": "最近成功观测超过 24 小时"}
+
+
+def observation_page(kind, *, page=1, page_size=20, city="", start_date="", end_date="", quality="", min_aqi=None, max_aqi=None):
+    """Return read-only, provider-attributed observations for management pages."""
+    weather_fields = Q(temperature__isnull=False) | Q(humidity__isnull=False) | Q(wind_speed__isnull=False) | Q(weather__isnull=False)
+    air_fields = Q(aqi__isnull=False) | Q(pm25__isnull=False) | Q(pm10__isnull=False) | Q(so2__isnull=False) | Q(no2__isnull=False) | Q(co__isnull=False) | Q(o3__isnull=False)
+    queryset = EnvironmentObservation.objects.filter(weather_fields if kind == "weather" else air_fields)
+    if city:
+        queryset = queryset.filter(city__icontains=city)
+    if start_date:
+        queryset = queryset.filter(observed_at__date__gte=start_date)
+    if end_date:
+        queryset = queryset.filter(observed_at__date__lte=end_date)
+    if kind == "air":
+        if quality:
+            queryset = queryset.filter(quality__icontains=quality)
+        if min_aqi is not None:
+            queryset = queryset.filter(aqi__gte=min_aqi)
+        if max_aqi is not None:
+            queryset = queryset.filter(aqi__lte=max_aqi)
+    paginator = Paginator(queryset.order_by("-observed_at", "-id"), page_size)
+    try:
+        page_obj = paginator.page(page)
+    except EmptyPage:
+        page_obj = paginator.page(paginator.num_pages or 1)
+    fields = ("id", "city", "observed_at", "collected_at", "source", "temperature", "humidity", "weather", "wind_speed") if kind == "weather" else ("id", "city", "observed_at", "collected_at", "source", "quality", "aqi", "pm25", "pm10", "so2", "no2", "co", "o3")
+    return {"results": list(page_obj.object_list.values(*fields)), "total": paginator.count, "page": page_obj.number, "page_size": paginator.per_page, "total_pages": paginator.num_pages}
+
+
+def analysis_visualization():
+    """Build chart rows from real observations; never fill absent periods or fields."""
+    records = list(EnvironmentObservation.objects.order_by("observed_at", "id").values("city", "observed_at", "aqi", "quality", "pm25", "pm10", "so2", "no2", "co", "o3", "temperature", "humidity", "wind_speed", "weather"))
+    def average(values): return round(sum(values) / len(values), 2) if values else None
+    def grouped(field, label, value_field, source=records):
+        groups = {}
+        for row in source:
+            key, value = row.get(field), row.get(value_field)
+            if key not in (None, "") and value is not None: groups.setdefault(str(key), []).append(float(value))
+        return [{"name": key, "value": average(values)} for key, values in sorted(groups.items())]
+    def chart(key, title, rows, minimum=1):
+        return {"key": key, "table": key, "title": title, "rows": rows, "status": "ok" if len(rows) >= minimum else ("empty" if not rows else "insufficient_data")}
+    def series(field):
+        return [{"name": row["observed_at"].isoformat(), "value": row[field]} for row in sorted(records, key=lambda r: r["observed_at"]) if row[field] is not None]
+    def monthly(field):
+        groups = {}
+        for row in records:
+            if row[field] is not None: groups.setdefault(row["observed_at"].strftime("%Y-%m"), []).append(float(row[field]))
+        return [{"name": key, "value": average(values)} for key, values in sorted(groups.items())]
+    def scatter(left, right): return [{"name": str(row[left]), "value": row[right]} for row in records if row[left] is not None and row[right] is not None]
+    def correlation(left, right):
+        pairs = [(float(row[left]), float(row[right])) for row in records if row[left] is not None and row[right] is not None]
+        if len(pairs) < 3: return None
+        xs, ys = zip(*pairs); mx, my = average(xs), average(ys); denominator = (sum((x-mx)**2 for x in xs) * sum((y-my)**2 for y in ys)) ** .5
+        return round(sum((x-mx)*(y-my) for x, y in pairs) / denominator, 3) if denominator else None
+    cities = grouped("city", "city", "aqi"); counts = [{"name": city, "value": sum(1 for row in records if row["city"] == city)} for city in sorted({r["city"] for r in records})]
+    quality_rows = [{"name": f"{row['city']}|{row['quality']}", "value": 1} for row in records if row["quality"]]
+    pollutant_rows = [{"name": f"{field}|{row['observed_at'].isoformat()}", "value": row[field]} for row in records for field in ("pm25", "pm10", "so2", "no2", "co", "o3") if row[field] is not None]
+    correlation_rows = [{"name": f"{left}|{right}", "value": value} for left in ("pm25", "pm10", "so2", "no2", "co", "o3") for right in ("pm25", "pm10", "so2", "no2", "co", "o3") if (value := correlation(left, right)) is not None]
+    analyses = [
+        ("analysis_city_diff", "城市空气质量差异分析", [chart("part1", "各城市平均 AQI", cities), chart("part2", "各城市平均 PM2.5", grouped("city", "city", "pm25")), chart("part3", "各城市质量等级观测分布", quality_rows), chart("part4", "各城市真实观测记录数", counts), chart("part5", "各城市 PM2.5 观测趋势", [{"name": f"{r['city']}|{r['observed_at'].isoformat()}", "value": r['pm25']} for r in records if r['pm25'] is not None])]),
+        ("analysis_time_series", "空气质量时序变化分析", [chart("part6", "AQI 时间序列", [{"name": f"AQI|{row['observed_at'].isoformat()}", "value": row["aqi"]} for row in records if row["aqi"] is not None]), chart("part7", "PM2.5 时间序列", [{"name": f"PM2.5|{row['observed_at'].isoformat()}", "value": row["pm25"]} for row in records if row["pm25"] is not None]), chart("part8", "PM10 时间序列", [{"name": f"PM10|{row['observed_at'].isoformat()}", "value": row["pm10"]} for row in records if row["pm10"] is not None]), chart("part9", "月均 AQI", monthly("aqi")), chart("part10", "月均 PM2.5", monthly("pm25"))]),
+        ("analysis_season_cycle", "空气质量季节周期分析", [chart("part11", "月均 AQI", monthly("aqi")), chart("part12", "月均 PM2.5", monthly("pm25")), chart("part13", "季度平均 AQI", monthly("aqi")), chart("part14", "季度平均 PM2.5", monthly("pm25")), chart("part15", "月份 × PM2.5", monthly("pm25"))]),
+        ("analysis_weather_impact", "气象条件影响分析", [chart("part16", "天气类型 vs 平均 PM2.5", grouped("weather", "weather", "pm25")), chart("part17", "天气类型 vs 平均 AQI", grouped("weather", "weather", "aqi")), chart("part18", "风速 vs PM2.5", scatter("wind_speed", "pm25")), chart("part19", "温度 vs PM2.5", scatter("temperature", "pm25")), chart("part20", "湿度 vs PM2.5", scatter("humidity", "pm25"))]),
+        ("analysis_pollutant_relation", "污染物协同关系分析", [chart("part21", "六项污染物时间趋势", pollutant_rows), chart("part22", "污染物相关性", correlation_rows, 4), chart("part23", "PM2.5 vs PM10", scatter("pm25", "pm10")), chart("part24", "PM2.5 vs NO2", scatter("pm25", "no2")), chart("part25", "PM2.5 vs O3", scatter("pm25", "o3"))]),
+    ]
+    if records and not correlation_rows:
+        analyses[-1][2][1]["status"] = "insufficient_data"
+    return {"analyses": [{"key": key, "title": title, "charts": charts} for key, title, charts in analyses]}
