@@ -8,6 +8,10 @@
 
 一个可二次开发的 Django + Vue 环境监测项目。它从开发者自行配置的第三方 Provider 获取当前天气与空气污染物浓度，将已验证的真实观测累积到数据库，并以 REST API 提供实时页面、历史数据与图表数据。
 
+## 项目预览
+
+![Open Environment Monitor Dashboard](docs/images/dashboard.png)
+
 ## Features
 
 - OpenWeather Provider：当前天气、温湿度、风速、PM2.5、PM10、SO2、NO2、CO、O3。
