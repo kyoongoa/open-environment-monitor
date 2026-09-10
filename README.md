@@ -1,7 +1,7 @@
 # Open Environment Monitor
 
 [![CI](https://github.com/kyoongoa/open-environment-monitor/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kyoongoa/open-environment-monitor/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/Python-3.11-blue)
+![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
 ![Django](https://img.shields.io/badge/Django-4.2.29-092E20)
 ![Vue](https://img.shields.io/badge/Vue-3.5.29-42b883)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -32,25 +32,67 @@
 - Frontend: Vue 3, Vite, Axios, ECharts
 - Database: MySQL 8+（开发和 CI 可切换 SQLite）
 
-## Getting Started
 
-1. Clone 后复制 `.env.example` 为 `.env`，并填写变量。Django 启动时会读取根目录中简单的 `KEY=VALUE` 配置。
-2. 创建空 MySQL 数据库 `environment_monitoring`，配置 `DB_*`；或设置 `DB_ENGINE=sqlite` 无数据库服务启动。
-3. 在 [OpenWeather API](https://openweathermap.org/api) 注册自己的 Key，配置 `OPENWEATHER_API_KEY`。请自行确认套餐、速率限制、缓存和存储条款；本仓库不声称获得额外授权。
-4. 安装并启动：
+## 快速开始
+
+### 环境要求
+
+- Python 3.9+
+- Node.js 22+
+- npm
+- OpenWeather API Key
+
+> 本项目已在 Python 3.9 本地环境运行验证，并在 GitHub Actions 的 Python 3.11 环境中通过自动化测试。
+
+MySQL 不是必需项。为了让项目更容易本地启动，推荐首次运行时使用 SQLite，这样无需额外安装数据库服务。
+使用 SQLite 时，数据库固定保存在 `backend/db.sqlite3`，无论从仓库根目录还是 `backend` 目录执行 Django 命令，都会使用同一文件。
+
+### 1. 克隆项目
+
+```bash
+git clone https://github.com/kyoongoa/open-environment-monitor.git
+cd open-environment-monitor
+
+### 2. 配置环境变量
+
+复制示例配置文件：
+
+**Windows PowerShell**
+
+```powershell
+Copy-Item .env.example .env
+
+### 3. 启动后端
+
+在仓库根目录执行：
 
 ```bash
 pip install -r backend/requirements.txt
 python backend/manage.py migrate
 python backend/manage.py runserver
 
+### 4. 启动前端
+
+另外打开一个终端。
+
+**Windows PowerShell**
+
+```powershell
 cd frontend
-npm ci
-npm run dev
-```
+npm.cmd ci
+npm.cmd run dev
 
-Vite 会把 `/api` 代理到 Django。访问终端显示的 Vite 地址。首次请求 `GET /api/environment/realtime/?city=北京` 成功后写入数据库；以后数据随每次缓存过期后的成功请求累积。
+### 5. 验证实时数据
 
+启动前后端后，可以在页面中输入例如：
+
+```text
+Beijing
+北京
+北京市
+Hangzhou
+杭州
+杭州市
 ## Data Provider and Limitations
 
 当前唯一运行时 Provider 是 OpenWeather，必须提供 API Key。它的空气污染 API 给出浓度和 1–5 分类；界面显示的 `US AQI` 只由 PM2.5 根据 EPA 断点计算，不是任何地区的官方综合 AQI。若 Key 缺失、城市不存在、网络故障或 Provider 返回无效 JSON，服务返回明确错误；若内存中有最后一次成功值，则返回 `stale_cache` 和时间戳。

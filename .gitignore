@@ -13,6 +13,9 @@ htmlcov/
 backend/db.sqlite3
 *.sqlite
 *.sqlite3
+# Legacy relative SQLite database paths from earlier local configurations.
+/environment_monitoring
+/backend/environment_monitoring
 backend/media/
 backend/dist/
 *.log
@@ -33,4 +36,3 @@ Thumbs.db
 .env
 .env.*
 !.env.example
-/backend/environment_monitoring
