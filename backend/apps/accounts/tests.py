@@ -12,7 +12,8 @@ class FakeProvider(EnvironmentDataProvider):
     calls = 0
     def fetch_current(self, city):
         type(self).calls += 1
-        return {"city": city, "observed_at": datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat(), "collected_at": datetime.now(timezone.utc).isoformat(), "source": self.name, "source_url": "https://example.test", "aqi": 42, "quality": "Good", "pm25": 10.0, "pm10": 20.0}
+        canonical = {"Beijing": "北京市", "北京市": "北京市", "Lanzhou": "兰州市", "兰州市": "兰州市"}.get(city, city)
+        return {"city": canonical, "observed_at": datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat(), "collected_at": datetime.now(timezone.utc).isoformat(), "source": self.name, "source_url": "https://example.test", "aqi": 42, "quality": "Good", "pm25": 10.0, "pm10": 20.0}
 
 
 @override_settings(ENVIRONMENT_CACHE_SECONDS=300)
@@ -21,8 +22,9 @@ class EnvironmentApiTests(TestCase):
         cache._data.clear()
         FakeProvider.calls = 0
 
+    @patch("apps.accounts.environment._transliterate_chinese", side_effect=lambda city: {"北京": "beijing", "兰州": "lanzhou"}[city])
     @patch("apps.accounts.environment.get_provider", return_value=FakeProvider())
-    def test_city_aliases_share_realtime_history_and_trend(self, _provider):
+    def test_city_aliases_share_realtime_history_and_trend(self, _provider, _transliterate):
         first = self.client.get("/api/environment/realtime/", {"city": "Beijing"})
         second = self.client.get("/api/environment/realtime/", {"city": "北京"})
         self.assertEqual(first.status_code, 200)
@@ -38,6 +40,19 @@ class EnvironmentApiTests(TestCase):
             self.assertEqual(history_response.json()["data"][0]["city"], "北京市")
             self.assertEqual(trend_response.status_code, 200)
             self.assertEqual(trend_response.json()["data"][0]["aqi"], 42)
+
+    @patch("apps.accounts.environment._transliterate_chinese", return_value="lanzhou")
+    @patch("apps.accounts.environment.get_provider", return_value=FakeProvider())
+    def test_lanzhou_aliases_share_canonical_history_and_trend(self, _provider, _transliterate):
+        first = self.client.get("/api/environment/realtime/", {"city": "Lanzhou"})
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["data"]["city"], "兰州市")
+        for alias in ("Lanzhou", "兰州", "兰州市"):
+            history_response = self.client.get("/api/environment/history/", {"city": alias})
+            trend_response = self.client.get("/api/environment/trend/", {"city": alias})
+            self.assertEqual(history_response.status_code, 200)
+            self.assertEqual(history_response.json()["data"][0]["city"], "兰州市")
+            self.assertEqual(trend_response.status_code, 200)
 
     @override_settings(OPENWEATHER_API_KEY="")
     def test_missing_key_returns_explicit_unavailable_error(self):

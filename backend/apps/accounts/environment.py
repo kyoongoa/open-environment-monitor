@@ -28,20 +28,44 @@ class CityResolutionError(ProviderError):
 
 # Aliases are intentionally limited to common, unambiguous names. Other city
 # names are preserved so OpenWeather geocoding remains the authority.
-CITY_ALIASES = {
-    "beijing": "北京市", "北京": "北京市", "北京市": "北京市",
-    "shanghai": "上海市", "上海": "上海市", "上海市": "上海市",
-    "guangzhou": "广州市", "广州": "广州市", "广州市": "广州市",
-    "hangzhou": "杭州市", "杭州": "杭州市", "杭州市": "杭州市",
-}
+def _contains_cjk(value):
+    return any("\u4e00" <= char <= "\u9fff" for char in value)
+
+
+def _transliterate_chinese(city):
+    """Convert a Chinese place name to a provider-compatible pinyin query."""
+    try:
+        from pypinyin import Style, lazy_pinyin
+    except ImportError as exc:
+        raise ProviderError("Chinese city fallback requires the pypinyin dependency.") from exc
+    return "".join(lazy_pinyin(city, style=Style.NORMAL))
 
 
 def normalize_city(city):
-    """Return the single canonical identifier used by cache, storage and lookup."""
+    """Apply syntax-only normalization without maintaining a city whitelist."""
     value = " ".join(str(city or "").strip().split())
     if not value:
         raise CityResolutionError("The city parameter is required.")
-    return CITY_ALIASES.get(value.casefold(), value)
+    if _contains_cjk(value) and not value.endswith("市"):
+        return f"{value}市"
+    return value
+
+
+def resolve_city(city):
+    """Resolve aliases already accumulated in storage to their canonical city."""
+    normalized = normalize_city(city)
+    if _contains_cjk(normalized):
+        return normalized
+
+    target = normalized.casefold().replace(" ", "")
+    for canonical in EnvironmentObservation.objects.values_list("city", flat=True).distinct():
+        if _contains_cjk(canonical):
+            base = canonical[:-1] if canonical.endswith("市") else canonical
+            if _transliterate_chinese(base).casefold() == target:
+                return canonical
+        elif canonical.casefold() == normalized.casefold():
+            return canonical
+    return normalized
 
 
 class EnvironmentDataProvider:
@@ -100,6 +124,10 @@ class OpenWeatherProvider(EnvironmentDataProvider):
         if not self.api_key:
             raise ProviderError("Environment API is not configured. Please configure OPENWEATHER_API_KEY.")
         geo = _json_request(f"{self.base_url}/geo/1.0/direct?{urlencode({'q': city, 'limit': 1, 'appid': self.api_key})}")
+        if not geo and _contains_cjk(city):
+            base_city = city[:-1] if city.endswith("市") else city
+            pinyin_city = _transliterate_chinese(base_city)
+            geo = _json_request(f"{self.base_url}/geo/1.0/direct?{urlencode({'q': pinyin_city, 'limit': 1, 'appid': self.api_key})}")
         if not geo:
             raise ProviderError("City was not found by the configured provider.")
         location = geo[0]
@@ -165,7 +193,7 @@ def _persist(data):
 
 
 def get_realtime(city):
-    city = normalize_city(city)
+    city = resolve_city(city)
     key = city.casefold()
     cached = cache.get(key)
     if cached: return {**cached, "data_status": "cached"}
@@ -173,7 +201,7 @@ def get_realtime(city):
         data = get_provider().fetch_current(city)
         data["city"] = normalize_city(data.get("city"))
         _persist(data)
-        return {**cache.set(key, data), "data_status": "live"}
+        return {**cache.set(data["city"].casefold(), data), "data_status": "live"}
     except ProviderError:
         stale = cache.get(key, allow_stale=True)
         if stale: return {**stale, "data_status": "stale_cache", "warning": "Provider unavailable; returning the last successful cached measurement."}
@@ -181,6 +209,6 @@ def get_realtime(city):
 
 
 def history(city, limit=100):
-    city = normalize_city(city)
+    city = resolve_city(city)
     fields = ("city", "observed_at", "collected_at", "source", "aqi", "quality", "pm25", "pm10", "so2", "no2", "co", "o3", "temperature", "humidity", "wind_speed", "weather")
     return list(EnvironmentObservation.objects.filter(city__iexact=city).order_by("-observed_at")[:limit].values(*fields))
